@@ -6,7 +6,7 @@ package Config::Grammar;
 use strict;
 
 use vars qw($VERSION);
-$VERSION = '1.01';
+$VERSION = '1.02';
 
 sub new($$)
 {
@@ -58,7 +58,7 @@ sub _quotesplit($)
             push @items, $frag;
         }
         else {
-            die "Internal parser error for '$line'\n";
+            die "Internal parser error for '$line'";
         }
     }
     return @items;
@@ -93,7 +93,7 @@ sub _check_mandatory($$$$)
             if (not defined $g->{$_}) {
                 $g->{$_} = {};
 
-#$self->{'err'} = "ParseConfig internal error: mandatory name $_ not found in grammar";
+#$self->{'err'} = "Config::Grammar internal error: mandatory name $_ not found in grammar";
                 #return 0;
             }
             if (not defined $c->{$_}) {
@@ -201,7 +201,7 @@ sub _next_level($$$)
     my $s = $self->_search_section($name);
     return 0 unless defined $s;
     if (not defined $self->{grammar}{$s}) {
-        $self->_make_error("ParseConfig internal error (no grammar for $s)");
+        $self->_make_error("Config::Grammar internal error (no grammar for $s)");
         return 0;
     }
     push @{$self->{grammar_stack}}, $self->{grammar};
@@ -587,7 +587,7 @@ sub _parse_line($$$)
         return 1;
     };
     /^\@define\s+(\S+)\s+(.*)$/ and do {
-	$self->{defines}{$1}=quotemeta $2;
+	$self->{defines}{$1}=$2;
 	return 1;
     };
 
@@ -1063,7 +1063,7 @@ documentation of the configuration file format.
 
 The B<maketmpl> method can generate a template configuration file.  If
 your grammar contains regexp matches, the template will not be all
-that helpful as ParseConfig is not smart enough to give you sensible
+that helpful as Config::Grammar is not smart enough to give you sensible
 template data based in regular expressions.
 
 =head2 Grammar Definition
@@ -1426,18 +1426,18 @@ The data is interpreted as one or more columns separated by spaces.
 
  *** network ***
   
-   dns      = 129.132.7.87
+   dns      = 192.168.7.87
   
- + 129.132.7.64
+ + 192.168.7.64
  
    netmask  = 255.255.255.192
-   gateway  = 129.132.7.65
+   gateway  = 192.168.7.65
   
  *** hosts ***
  
-   00:50:fe:bc:65:11     129.132.7.97    plain.hades
-   00:50:fe:bc:65:12     129.132.7.98    isg.ee.hades
-   00:50:fe:bc:65:14     129.132.7.99    isg.ee.hades
+   00:50:fe:bc:65:11     192.168.7.97    plain.hades
+   00:50:fe:bc:65:12     192.168.7.98    isg.ee.hades
+   00:50:fe:bc:65:14     192.168.7.99    isg.ee.hades
 
 =head3 Result
 
@@ -1445,26 +1445,26 @@ The data is interpreted as one or more columns separated by spaces.
    'hosts' => {
                 '00:50:fe:bc:65:11' => [
                                          '00:50:fe:bc:65:11',
-                                         '129.132.7.97',
+                                         '192.168.7.97',
                                          'plain.hades'
                                        ],
                 '00:50:fe:bc:65:12' => [
                                          '00:50:fe:bc:65:12',
-                                         '129.132.7.98',
+                                         '192.168.7.98',
                                          'isg.ee.hades'
                                        ],
                 '00:50:fe:bc:65:14' => [
                                          '00:50:fe:bc:65:14',
-                                         '129.132.7.99',
+                                         '192.168.7.99',
                                          'isg.ee.hades'
                                        ]
               },
    'network' => {
-                  '129.132.7.64' => {
+                  '192.168.7.64' => {
                                       'netmask' => '255.255.255.192',
-                                      'gateway' => '129.132.7.65'
+                                      'gateway' => '192.168.7.65'
                                     },
-                  'dns' => '129.132.7.87'
+                  'dns' => '192.168.7.87'
                 }
  };
 

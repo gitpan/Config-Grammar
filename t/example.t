@@ -13,7 +13,7 @@ BEGIN {
 use Config::Grammar;
 ok(1);
 
-my $RE_IP       = '\d+\.\d+\.\d+\.\d+';                 # 129.132.116.12
+my $RE_IP       = '\d+\.\d+\.\d+\.\d+';                 # 192.168.116.12
 my $RE_MAC      = '[0-9a-f]{2}(?::[0-9a-f]{2}){5}';     # 00:50:fe:bc:65:13
 my $RE_HOST     = '\S+';
 
