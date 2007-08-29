@@ -5,8 +5,7 @@ package Config::Grammar;
 
 use strict;
 
-use vars qw($VERSION);
-$VERSION = '1.02';
+$Config::Grammar::VERSION = '1.03';
 
 sub new($$)
 {
@@ -480,10 +479,10 @@ sub _parse_table($$)
         if (defined $gc->{_re}) {
             $c =~ /^$gc->{_re}$/ or do {
                 if (defined $gc->{_re_error}) {
-                    $self->_make_error($gc->{_re_error});
+                    $self->_make_error("column ".($n+1).": $gc->{_re_error}");
                 }
                 else {
-                    $self->_make_error("syntax error in column $n");
+                    $self->_make_error("syntax error in column ".($n+1));
                 }
                 return 0;
             };
@@ -579,9 +578,14 @@ sub _parse_line($$$)
     my $source = shift;
 
     /^\@include\s+["']?(.*)["']?$/ and do {
+	my $inc = $1;
+        if ( ( $^O eq 'win32' and $inc !~ m|^(?:[a-z]:)?[/\\]|i and  $self->{file} =~ m|^(.+)[\\/][^/]+$| ) or
+	     ( $inc !~ m|^/| and $self->{file} =~ m|^(.+)/[^/]+$| ) ){
+	   $inc = "$1/$inc";
+        }	
         push @{$self->{file_stack}}, $self->{file};
         push @{$self->{line_stack}}, $self->{line};
-        $self->_parse_file($1) or return 0;
+        $self->_parse_file($inc) or return 0;
         $self->{file} = pop @{$self->{file_stack}};
         $self->{line} = pop @{$self->{line_stack}};
         return 1;
@@ -657,7 +661,6 @@ sub _parse_file($$)
     local *File;
     unless ($file) { $self->{'err'} = "no filename given" ;
                      return undef;};
-
     open(File, "$file") or do {
         $self->{'err'} = "can't open $file: $!";
         return undef;
@@ -923,6 +926,7 @@ sub makepod($) {
 sub _gentmpl($$$@);
 sub _gentmpl($$$@){
     my $tree = shift;
+    my $complete = shift;
     my $level = shift;
     my $doc = shift;
     my @start = @_;
@@ -935,12 +939,19 @@ sub _gentmpl($$$@){
 	if ($tree->{$section}{_example}) {
 	    $secex = " #  ( ex. $tree->{$section}{_example} )";
 	}
- 	push @{$doc}, $prefix.
-	    (($level > 0) ? ("+" x $level)."$section" : "*** $section ***").$secex;
+
+	if($complete) {
+	    push @{$doc}, $prefix.
+		(($level > 0) ? ("+" x $level)."$section" : "*** $section ***").$secex;
+	} else {
+	    my $minsection=$section =~ m|^/| ? "" : $section;
+	    push @{$doc},(($level > 0) ? ("+" x $level)."$minsection" : "*** $minsection ***");
+	}
+	
 	my $match;
 	foreach my $s (@{$tree->{_sections}}){
 	    if ($s =~ m|^/.+/$| and $section =~ /$s/ or $s eq $section) {
-		_gentmpl ($tree->{$s},$level+1,$doc,@start)
+		_gentmpl ($tree->{$s},$complete,$level+1,$doc,@start)
 		    unless $tree eq $tree->{$s};
 		$match = 1;
 	    }
@@ -950,15 +961,21 @@ sub _gentmpl($$$@){
     } else {
 	if ($tree->{_vars}){
 	    foreach my $var (@{$tree->{_vars}}){
-		push @{$doc}, "# $var = ". 
-		    ($tree->{$var}{_example} || ' * no example *');
-		next unless $tree->{_mandatory} and 
-		    grep {$_ eq $var} @{$tree->{_mandatory}};
-		push @{$doc}, "$var=";
+		my $mandatory= ($tree->{_mandatory} and 
+		    grep {$_ eq $var} @{$tree->{_mandatory}});
+		if($complete) {
+		    push @{$doc}, "# $var = ". 
+			($tree->{$var}{_example} || ' * no example *');
+		    push @{$doc}, "$var=" if $mandatory;
+		} else {
+			push @{$doc}, ($mandatory?"":"# ")."$var=";
+		    next unless $tree->{_mandatory} and 
+			grep {$_ eq $var} @{$tree->{_mandatory}};
+		}
 	    }
 	}
 
-	if ($tree->{_text}){
+	if ($tree->{_text} and $complete){
 	    if ($tree->{_text}{_example}){
 		my $ex = $tree->{_text}{_example};
 		chomp $ex;
@@ -966,7 +983,7 @@ sub _gentmpl($$$@){
 		push @{$doc}, "$ex\n";
 	    }
 	}
-	if ($tree->{_table}){
+	if ($tree->{_table} and $complete){
 	    my $table = "# table\n#";
 	    for (my $i=0;$i < $tree->{_table}{_columns}; $i++){
 		$table .= ' "'.($tree->{_table}{$i}{_example} || "C$i").'"';
@@ -975,20 +992,28 @@ sub _gentmpl($$$@){
 	}
 	if ($tree->{_sections}){
 	    foreach my $section (@{$tree->{_sections}}){
-		my $opt = ( $tree->{_mandatory} and 
-		 	    grep {$_ eq $section} @{$tree->{_mandatory}} ) ?
-				"":"\n# optional section\n"; 
+		my $opt = "";
+		unless( $tree->{_mandatory} and 
+			grep {$_ eq $section} @{$tree->{_mandatory}} ) {
+		    $opt="\n# optional section\n" if $complete;
+		}
 		my $prefix = '';
 		$prefix = "# " unless $tree->{_mandatory} and 
 		    grep {$_ eq $section} @{$tree->{_mandatory}};
 		my $secex ="";
 		if ($section =~ m|^/.+/$| && $tree->{$section}{_example}) {
-		    $secex = " #  ( ex. $tree->{$section}{_example} )";
+		    $secex = " #  ( ex. $tree->{$section}{_example} )"
+			if $complete;
 		}
-		push @{$doc}, $prefix.
-		    (($level > 0) ? ("+" x $level)."$section" : "*** $section ***").
-			$secex;
-		_gentmpl ($tree->{$section},$level+1,$doc,@start)
+		if($complete) {
+		    push @{$doc}, $prefix.
+			(($level > 0) ? ("+" x $level)."$section" : "*** $section ***").
+			    $secex;
+		} else {
+		    my $minsection=$section =~ m|^/| ? "" : $section;
+		    push @{$doc},(($level > 0) ? ("+" x $level)."$minsection" : "*** $minsection ***");
+		}
+		_gentmpl ($tree->{$section},$complete,$level+1,$doc,@start)
 		    unless $tree eq $tree->{$section};
 	    }
 	}
@@ -1000,7 +1025,16 @@ sub maketmpl ($@) {
     my @start = @_;
     my $tree = $self->{grammar};
     my @tmpl;
-    _gentmpl $tree,0,\@tmpl,@start;
+    _gentmpl $tree,1,0,\@tmpl,@start;
+    return join("\n", @tmpl)."\n";
+}
+
+sub makemintmpl ($@) {
+    my $self = shift;
+    my @start = @_;
+    my $tree = $self->{grammar};
+    my @tmpl;
+    _gentmpl $tree,0,0,\@tmpl,@start;
     return join("\n", @tmpl)."\n";
 }
 
@@ -1049,6 +1083,7 @@ Config::Grammar - A grammar-based, user-friendly config parser
  my $cfg = $parser->parse('app.cfg') or die "ERROR: $parser->{err}\n";
  my $pod = $parser->makepod();
  my $ex = $parser->maketmpl('TOP','SubNode');
+ my $minex = $parser->maketmplmin('TOP','SubNode');
 
 =head1 DESCRIPTION
 
@@ -1064,7 +1099,11 @@ documentation of the configuration file format.
 The B<maketmpl> method can generate a template configuration file.  If
 your grammar contains regexp matches, the template will not be all
 that helpful as Config::Grammar is not smart enough to give you sensible
-template data based in regular expressions.
+template data based in regular expressions. The related function 
+B<maketmplmin> generates a minimal configuration template without 
+examples, regexps or comments and thus allows an experienced user to
+fill in the configuration data more efficiently.
+
 
 =head2 Grammar Definition
 
@@ -1310,7 +1349,8 @@ at the beginning and end of lines is trimmed.
 '\' at the end of the line marks a continued line on the next line. A single
 space will be inserted between the concatenated lines.
 
-'@include filename' is used to include another file.
+'@include filename' is used to include another file. Include works relative to the
+directory where the parent file is in.
 
 '@define a some value' will replace all occurences of 'a' in the following text
 with 'some value'.
@@ -1357,6 +1397,13 @@ The data is interpreted as one or more columns separated by spaces.
 =head2 Example
 
 =head3 Code
+
+ use Data::Dumper;
+ use Config::Grammar;
+
+ my $RE_IP       = '\d+\.\d+\.\d+\.\d+';
+ my $RE_MAC      = '[0-9a-f]{2}(?::[0-9a-f]{2}){5}';
+ my $RE_HOST     = '\S+';
 
  my $parser = Config::Grammar->new({
    _sections => [ 'network', 'hosts' ],
@@ -1420,7 +1467,7 @@ The data is interpreted as one or more columns separated by spaces.
  my $cfg = $parser->parse('test.cfg') or
    die "ERROR: $parser->{err}\n";
  print Dumper($cfg);
- print $praser->makepod;
+ print $parser->makepod;
 
 =head3 Configuration
 
@@ -1477,16 +1524,11 @@ Copyright (c) 2000-2005 by ETH Zurich. All rights reserved.
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
-=head1 AUTHOR
+=head1 AUTHORS
 
-David Schweikert E<lt>dws_at_ee.ethz.chE<gt>,
-Tobias Oetiker E<lt>oetiker_at_ee.ethz.chE<gt>,
-Niko Tyni  E<lt>ntyni_at_iki.fiE<gt>
-
-=head1 HISTORY
-
- 2001-05-11 ds      Initial Version of ISG::ParseConfig
- 2005-03-08 ds 1.00 Renamed from ISG::ParseConfig to Config::Grammar 
+David Schweikert,
+Tobias Oetiker,
+Niko Tyni
 
 =cut
 
