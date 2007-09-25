@@ -11,13 +11,13 @@ BEGIN {
 	plan tests => 28;
 }
 
-use Config::Grammar;
+use Config::Grammar::Dynamic;
 
 ok(1);
 
 # _default, _inherited, _recursive
 
-my $parser = new Config::Grammar({
+my $parser = new Config::Grammar::Dynamic({
 	_sections => [ 'top' ],
 	_vars => [ (qw(a b c d)) ],
 	_recursive => [ 'top' ],

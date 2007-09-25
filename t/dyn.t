@@ -11,7 +11,7 @@ BEGIN {
 	plan tests => 7;
 }
 
-use Config::Grammar;
+use Config::Grammar::Dynamic;
 
 ok(1);
 
@@ -42,7 +42,7 @@ my $sub = sub {
 	return undef;
 };
 
-my $parser = new Config::Grammar({
+my $parser = new Config::Grammar::Dynamic({
 	_sections => [ 'test' ],
 	_vars => [ qw(a) ],
 	a => {
@@ -139,7 +139,7 @@ local $/ = undef;
 my $pod = <F>;
 close F;
 my $pod2 = $parser->makepod;
-ok($pod, $pod2);
+ok($pod2, $pod);
 }
 
 {
@@ -148,7 +148,7 @@ local $/ = undef;
 my $tmpl = <F>;
 close F;
 my $tmpl2 = $parser->maketmpl;
-ok($tmpl, $tmpl2);
+ok($tmpl2, $tmpl);
 }
 
 my $cfg = $parser->parse('t/dyn1.cfg');

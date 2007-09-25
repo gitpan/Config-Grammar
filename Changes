@@ -1,5 +1,13 @@
 Revision history for Perl extension Config::Grammar.
 
+2007-09-25
+
+     * Released 1.10
+     * Split module in Config::Grammar and Config::Grammar::Dynamic, where only
+       Config::Grammar::Dynamic can process _dyn, _dyndoc and _recursive
+       directives
+     * Move documentation-generating code to Config::Grammar::Document
+
 2007-08-29
 
      * Released 1.03

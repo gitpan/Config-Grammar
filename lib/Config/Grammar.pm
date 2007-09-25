@@ -1,11 +1,7 @@
 package Config::Grammar;
-
-# TODO:
-# - _order for sections
-
 use strict;
 
-$Config::Grammar::VERSION = '1.03';
+$Config::Grammar::VERSION = '1.10';
 
 sub new($$)
 {
@@ -63,22 +59,6 @@ sub _quotesplit($)
     return @items;
 }
 
-sub _deepcopy {
-        # this handles circular references on consecutive levels,
-        # but breaks if there are any levels in between
-        # the makepod() and maketmpl() methods have the same limitation
-        my $what = shift;
-        return $what unless ref $what;
-        for (ref $what) {
-                /^ARRAY$/ and return [ map { $_ eq $what ? $_ : _deepcopy($_) } @$what ];
-                /^HASH$/ and return { map { $_ => $what->{$_} eq $what ? 
-                                            $what->{$_} : _deepcopy($what->{$_}) } keys %$what };
-                /^CODE$/ and return $what; # we don't need to copy the subs
-                /^Regexp$/ and return $what; # neither Regexp objects
-        }
-        die "Cannot _deepcopy reference type @{[ref $what]}";
-}
-
 sub _check_mandatory($$$$)
 {
     my $self    = shift;
@@ -91,9 +71,6 @@ sub _check_mandatory($$$$)
         for (@{$g->{_mandatory}}) {
             if (not defined $g->{$_}) {
                 $g->{$_} = {};
-
-#$self->{'err'} = "Config::Grammar internal error: mandatory name $_ not found in grammar";
-                #return 0;
             }
             if (not defined $c->{$_}) {
                 if (defined $section) {
@@ -204,41 +181,7 @@ sub _next_level($$$)
         return 0;
     }
     push @{$self->{grammar_stack}}, $self->{grammar};
-    if ($s =~ m|^/(.*)/$|) {
-        # for sections specified by a regexp, we create
-        # a new branch with a deep copy of the section 
-        # grammar so that any _dyn sub further below will edit
-        # just this branch
-
-        $self->{grammar}{$name} = _deepcopy($self->{grammar}{$s});
-
-        # put it at the head of the section list
-        $self->{grammar}{_sections} ||= [];
-        unshift @{$self->{grammar}{_sections}}, $name;
-    } 
-
-    # support for recursive sections
-    # copy the section syntax to the subsection
-
-    if ($self->{grammar}{_recursive} 
-        and grep { $_ eq $s } @{$self->{grammar}{_recursive}}) {
-        $self->{grammar}{$name}{_sections} ||= [];
-        $self->{grammar}{$name}{_recursive} ||= [];
-        push @{$self->{grammar}{$name}{_sections}}, $s;
-        push @{$self->{grammar}{$name}{_recursive}}, $s;
-        my $grammarcopy = _deepcopy($self->{grammar}{$name});
-        if (exists $self->{grammar}{$name}{$s}) {
-                # there's syntax for a variable by the same name too
-                # make sure we don't lose it
-                %{$self->{grammar}{$name}{$s}} = ( %$grammarcopy, %{$self->{grammar}{$name}{$s}} );
-        } else {
-                $self->{grammar}{$name}{$s} = $grammarcopy;
-        }
-    }
-
-    # this uses the copy created above for regexp sections 
-    # and the original for non-regexp sections (where $s == $name)
-    $self->{grammar} = $self->{grammar}{$name};
+    $self->{grammar} = $self->{grammar}{$s};
 
     # support for inherited values
     # note that we have to do this on the way down
@@ -287,20 +230,11 @@ sub _next_level($$$)
     # meta data for _mandatory test
     $self->{grammar}{_is_section} = 1;
     $self->{cfg}{_is_section}     = 1;
-
-    # this uses the copy created above for regexp sections 
-    # and the original for non-regexp sections (where $s == $name)
-    $self->{cfg}{_grammar}        = $name;
-
+    $self->{cfg}{_grammar}        = $s;
     $self->{cfg}{_order} = $order if defined $order;
 
     # increase level
     $self->{level}++;
-
-    # if there's a _dyn sub, apply it
-    if (defined $self->{grammar}{_dyn}) {
-        &{$self->{grammar}{_dyn}}($s, $name, $self->{grammar});
-    }
 
     return 1;
 }
@@ -435,10 +369,6 @@ sub _set_variable($$$)
                         return 0;
                 }
         }
-        # if there's a _dyn sub, apply it
-        if (defined $g->{_dyn}) {
-                &{$g->{_dyn}}($key, $value, $self->{grammar});
-        }
     }
     $self->{cfg}{$key} = $value;
     push @{$varlistref}, $key if ref $varlistref;
@@ -541,12 +471,6 @@ sub _check_text($$)
 	$self->{cfg}{_text} =~ s/\A([ \t]*[\n\r]+)*//m;
 	$self->{cfg}{_text} =~  s/^([ \t]*[\n\r]+)*\Z//m;
     }
-
-    # TODO: not good for META. Use _mandatory ?
-    #defined $self->{cfg}{_text} or do {
-    #  $self->_make_error("value of '$name' not defined");
-    #  return 0;
-    #};
 
     if (defined $g->{_re}) {
         $self->{cfg}{_text} =~ /^$g->{_re}$/ or do {
@@ -694,348 +618,31 @@ sub _parse_file($$)
     return 1;
 }
 
-# find variables in old grammar list 'listname'
-# that aren't in the corresponding list in the new grammar 
-# and list them as a POD document, possibly with a callback
-# function 'docfunc'
-
-sub _findmissing($$$;$) {
-	my $old = shift;
-	my $new = shift;
-	my $listname = shift;
-	my $docfunc = shift;
-
-	my @doc;
-	if ($old->{$listname}) {
-		my %newlist;
-		if ($new->{$listname}) {
-			@newlist{@{$new->{$listname}}} = undef;
-		} 
-		for my $v (@{$old->{$listname}}) {
-			next if exists $newlist{$v};
-			if ($docfunc) {
-				push @doc, &$docfunc($old, $v)
-			} else {
-				push @doc, "=item $v";
-			}
-		}
-	}
-	return @doc;
-}
-
-# find variables in new grammar list 'listname'
-# that aren't in the corresponding list in the new grammar
-#
-# this is just _findmissing with the arguments swapped
-
-sub _findnew($$$;$) {
-	my $old = shift;
-	my $new = shift;
-	my $listname = shift;
-	my $docfunc = shift;
-	return _findmissing($new, $old, $listname, $docfunc);
-}
-
-# compare two lists for element equality
-
-sub _listseq($$);
-sub _listseq($$) {
-	my ($k, $l) = @_;
-	my $length = @$k;
-	return 0 unless @$l == $length;
-	for (my $i=0; $i<$length; $i++) {
-		return 0 unless $k->[$i] eq $l->[$i];
-	}
-	return 1;
-}
-
-# diff two grammar trees, documenting the differences
-
-sub _diffgrammars($$);
-sub _diffgrammars($$) {
-	my $old = shift;
-	my $new = shift;
-	my @doc;
-
-	my @vdoc;
-	@vdoc = _findmissing($old, $new, '_vars');
-	push @doc, "The following variables are not valid anymore:", "=over" , @vdoc, "=back"
-		if @vdoc;
-	@vdoc = _findnew($old, $new, '_vars', \&_describevar);
-	push @doc, "The following new variables are valid:", "=over" , @vdoc, "=back"
-		if @vdoc;
-	@vdoc = _findmissing($old, $new, '_sections');
-	push @doc, "The following subsections are not valid anymore:", "=over" , @vdoc, "=back"
-		if @vdoc;
-	@vdoc = _findnew($old, $new, '_sections', sub { 
-		my ($tree, $sec) = @_; 
-		my @tdoc; 
-		_genpod($tree->{$sec}, 0, \@tdoc);
-		return @tdoc;
-	});
-	push @doc, "The following new subsections are defined:", "=over" , @vdoc, "=back"
-		if @vdoc;
-	for (@{$old->{_sections}}) {
-		next unless exists $new->{$_};
-		@vdoc = _diffgrammars($old->{$_}, $new->{$_});
-		push @doc, "Syntax changes for subsection B<$_>", "=over", @vdoc, "=back"
-			if @vdoc;
-	}
-	return @doc;
-}
-
-# describe a variable
-
-sub _describevar {
-	my $tree = shift;
-	my $var = shift;
-	my $mandatory = ( $tree->{_mandatory} and 
-		grep {$_ eq $var} @{$tree->{_mandatory}} ) ? 
-		" I<(mandatory setting)>" : ""; 
-	my @doc;
-	push @doc, "=item B<$var>".$mandatory;
-	push @doc, $tree->{$var}{_doc} if $tree->{$var}{_doc} ;
-	my $inherited = ( $tree->{_inherited} and 
-		grep {$_ eq $var} @{$tree->{_inherited}});
-	push @doc, "This variable I<inherits> its value from the parent section if nothing is specified here."
-		if $inherited;
-	push @doc, "This variable I<dynamically> modifies the grammar based on its value."
-		if $tree->{$var}{_dyn};
-	push @doc, "Default value: $var = $tree->{$var}{_default}"
-		if ($tree->{$var}{_default});
-	push @doc, "Example: $var = $tree->{$var}{_example}"
-		if ($tree->{$var}{_example});
-	return @doc;
-}
-
-sub _genpod($$$);
-sub _genpod($$$){
-    my $tree = shift;
-    my $level = shift;
-    my $doc = shift;
-    my %dyndoc;
-    if ($tree->{_vars}){
-	push @{$doc}, "The following variables can be set in this section:";
-	push @{$doc}, "=over";
-	foreach my $var (@{$tree->{_vars}}){
-	    push @{$doc}, _describevar($tree, $var);
-	}
-	push @{$doc}, "=back";
-    }
-
-    if ($tree->{_text}){
-	push @{$doc}, ($tree->{_text}{_doc} or "Unspecified Text content");
-	if ($tree->{_text}{_example}){
-	    my $ex = $tree->{_text}{_example};
-	    chomp $ex;
-	    $ex = map {" $_"} split /\n/, $ex;
-	    push @{$doc}, "Example:\n\n$ex\n";
-	}
-    }
-
-    if ($tree->{_table}){
-	push @{$doc}, ($tree->{_table}{_doc} or
-		       "This section can contain a table ".
-		       "with the following structure:" );
-	push @{$doc}, "=over";
-	for (my $i=0;$i < $tree->{_table}{_columns}; $i++){
-	    push @{$doc}, "=item column $i";
-	    push @{$doc}, ($tree->{_table}{$i}{_doc} or
-			   "Unspecific Content");
-	    push @{$doc}, "Example: $tree->{_table}{$i}{_example}"
-		    if ($tree->{_table}{$i}{_example})
-	}
-	push @{$doc}, "=back";
-    }
-    if ($tree->{_sections}){
-            if ($level > 0) {
-              push @{$doc}, "The following sections are valid on level $level:";
-  	      push @{$doc}, "=over";
-            }
-	    foreach my $section (@{$tree->{_sections}}){
-		my $mandatory = ( $tree->{_mandatory} and 
-				  grep {$_ eq $section} @{$tree->{_mandatory}} ) ?
-				      " I<(mandatory section)>" : "";
-		push @{$doc}, ($level > 0) ? 
-		    "=item B<".("+" x $level)."$section>$mandatory" :
-			"=head2 *** $section ***$mandatory";
-		if ($tree eq $tree->{$section}) {
-			push @{$doc}, "This subsection has the same syntax as its parent.";
-			next;
-		}
-		push @{$doc}, ($tree->{$section}{_doc})
-		    if $tree->{$section}{_doc};
-		push @{$doc}, "The grammar of this section is I<dynamically> modified based on its name."
-		    if $tree->{$section}{_dyn};
-		if ($tree->{_recursive} and 
-			 grep {$_ eq $section} @{$tree->{_recursive}}) {
-			 push @{$doc}, "This section is I<recursive>: it can contain subsection(s) with the same syntax.";
-		} 
-		_genpod ($tree->{$section},$level+1,$doc);
-		next unless $tree->{$section}{_dyn} and $tree->{$section}{_dyndoc};
-		push @{$doc}, "Dynamical grammar changes for example instances of this section:";
-		push @{$doc}, "=over";
-		for my $name (sort keys %{$tree->{$section}{_dyndoc}}) {
-			my $newtree = _deepcopy($tree->{$section});
-			push @{$doc}, "=item B<$name>: $tree->{$section}{_dyndoc}{$name}";
-			&{$tree->{$section}{_dyn}}($section, $name, $newtree);
-			my @tdoc = _diffgrammars($tree->{$section}, $newtree);
-			if (@tdoc) {
-				push @{$doc}, @tdoc;
-			} else {
-				push @{$doc}, "No changes that can be automatically described.";
-			}
-			push @{$doc}, "(End of dynamical grammar changes for example instance C<$name>.)";
-		}
-		push @{$doc}, "=back";
-		push @{$doc}, "(End of dynamical grammar changes for example instances of section C<$section>.)";
-	    }
-        push @{$doc}, "=back" if $level > 0    
-    }	
-    if ($tree->{_vars}) {
-    	for my $var (@{$tree->{_vars}}) {
-		next unless $tree->{$var}{_dyn} and $tree->{$var}{_dyndoc};
-		push @{$doc}, "Dynamical grammar changes for example values of variable C<$var>:";
-		push @{$doc}, "=over";
-		for my $val (sort keys %{$tree->{$var}{_dyndoc}}) {
-			my $newtree = _deepcopy($tree);
-			push @{$doc}, "=item B<$val>: $tree->{$var}{_dyndoc}{$val}";
-			&{$tree->{$var}{_dyn}}($var, $val, $newtree);
-			my @tdoc = _diffgrammars($tree, $newtree);
-			if (@tdoc) {
-				push @{$doc}, @tdoc;
-			} else {
-				push @{$doc}, "No changes that can be automatically described.";
-			}
-			push @{$doc}, "(End of dynamical grammar changes for variable C<$var> example value C<$val>.)";
-		}
-		push @{$doc}, "=back";
-		push @{$doc}, "(End of dynamical grammar changes for example values of variable C<$var>.)";
-	}
-    }
-};
-
 sub makepod($) {
-    my $self = shift;
-    my $tree = $self->{grammar};
-    my @doc;
-    _genpod $tree,0,\@doc;
-    return join("\n\n", @doc)."\n";
+    my $pod = eval {
+	require Config::Grammar::Document;
+	return Config::Grammar::Document::makepod(@_);
+    };
+    defined $pod or die "ERROR: install Config::Grammar::Document in order to use makepod(): $@\n";
+    return $pod;
 }
-
-sub _gentmpl($$$@);
-sub _gentmpl($$$@){
-    my $tree = shift;
-    my $complete = shift;
-    my $level = shift;
-    my $doc = shift;
-    my @start = @_;
-    if (scalar @start ) {
-	my $section = shift @start;
-	my $secex ='';
-	my $prefix = '';
-	$prefix = "# " unless $tree->{_mandatory} and 
-		    grep {$_ eq $section} @{$tree->{_mandatory}};
-	if ($tree->{$section}{_example}) {
-	    $secex = " #  ( ex. $tree->{$section}{_example} )";
-	}
-
-	if($complete) {
-	    push @{$doc}, $prefix.
-		(($level > 0) ? ("+" x $level)."$section" : "*** $section ***").$secex;
-	} else {
-	    my $minsection=$section =~ m|^/| ? "" : $section;
-	    push @{$doc},(($level > 0) ? ("+" x $level)."$minsection" : "*** $minsection ***");
-	}
-	
-	my $match;
-	foreach my $s (@{$tree->{_sections}}){
-	    if ($s =~ m|^/.+/$| and $section =~ /$s/ or $s eq $section) {
-		_gentmpl ($tree->{$s},$complete,$level+1,$doc,@start)
-		    unless $tree eq $tree->{$s};
-		$match = 1;
-	    }
-	}
-        push @{$doc}, "# Section $section is not a valid choice"
-	    unless $match;
-    } else {
-	if ($tree->{_vars}){
-	    foreach my $var (@{$tree->{_vars}}){
-		my $mandatory= ($tree->{_mandatory} and 
-		    grep {$_ eq $var} @{$tree->{_mandatory}});
-		if($complete) {
-		    push @{$doc}, "# $var = ". 
-			($tree->{$var}{_example} || ' * no example *');
-		    push @{$doc}, "$var=" if $mandatory;
-		} else {
-			push @{$doc}, ($mandatory?"":"# ")."$var=";
-		    next unless $tree->{_mandatory} and 
-			grep {$_ eq $var} @{$tree->{_mandatory}};
-		}
-	    }
-	}
-
-	if ($tree->{_text} and $complete){
-	    if ($tree->{_text}{_example}){
-		my $ex = $tree->{_text}{_example};
-		chomp $ex;
-		$ex = map {"# $_"} split /\n/, $ex;
-		push @{$doc}, "$ex\n";
-	    }
-	}
-	if ($tree->{_table} and $complete){
-	    my $table = "# table\n#";
-	    for (my $i=0;$i < $tree->{_table}{_columns}; $i++){
-		$table .= ' "'.($tree->{_table}{$i}{_example} || "C$i").'"';
-	    }
- 	    push @{$doc}, $table;
-	}
-	if ($tree->{_sections}){
-	    foreach my $section (@{$tree->{_sections}}){
-		my $opt = "";
-		unless( $tree->{_mandatory} and 
-			grep {$_ eq $section} @{$tree->{_mandatory}} ) {
-		    $opt="\n# optional section\n" if $complete;
-		}
-		my $prefix = '';
-		$prefix = "# " unless $tree->{_mandatory} and 
-		    grep {$_ eq $section} @{$tree->{_mandatory}};
-		my $secex ="";
-		if ($section =~ m|^/.+/$| && $tree->{$section}{_example}) {
-		    $secex = " #  ( ex. $tree->{$section}{_example} )"
-			if $complete;
-		}
-		if($complete) {
-		    push @{$doc}, $prefix.
-			(($level > 0) ? ("+" x $level)."$section" : "*** $section ***").
-			    $secex;
-		} else {
-		    my $minsection=$section =~ m|^/| ? "" : $section;
-		    push @{$doc},(($level > 0) ? ("+" x $level)."$minsection" : "*** $minsection ***");
-		}
-		_gentmpl ($tree->{$section},$complete,$level+1,$doc,@start)
-		    unless $tree eq $tree->{$section};
-	    }
-	}
-    }
-};
 
 sub maketmpl ($@) {
-    my $self = shift;
-    my @start = @_;
-    my $tree = $self->{grammar};
-    my @tmpl;
-    _gentmpl $tree,1,0,\@tmpl,@start;
-    return join("\n", @tmpl)."\n";
+    my $pod = eval {
+	require Config::Grammar::Document;
+	return Config::Grammar::Document::maketmpl(@_);
+    };
+    defined $pod or die "ERROR: install Config::Grammar::Document in order to use maketmpl()\n";
+    return $pod;
 }
 
 sub makemintmpl ($@) {
-    my $self = shift;
-    my @start = @_;
-    my $tree = $self->{grammar};
-    my @tmpl;
-    _gentmpl $tree,0,0,\@tmpl,@start;
-    return join("\n", @tmpl)."\n";
+    my $pod = eval {
+	require Config::Grammar::Document;
+	return Config::Grammar::Document::makemintmpl(@_);
+    };
+    defined $pod or die "ERROR: install Config::Grammar::Document in order to use makemintmpl()\n";
+    return $pod;
 }
 
 sub parse($$)
@@ -1049,9 +656,6 @@ sub parse($$)
     $self->{grammar_stack} = [];
     $self->{file_stack}    = [];
     $self->{line_stack}    = [];
-
-    # we work with a copy of the grammar so the _dyn subs may change it
-    local $self->{grammar} = _deepcopy($self->{grammar});
 
     $self->_parse_file($file) or return undef;
 
@@ -1067,7 +671,7 @@ sub parse($$)
 
 }
 
-1
+1;
 
 __END__
 
@@ -1129,15 +733,6 @@ The sub-section can also be a regular expression denoted by the syntax '/re/',
 where re is the regular-expression. In case a regular expression is used, a
 sub-hash named with the same '/re/' must be included in this hash.
 
-=item _recursive
-
-Array containing the list of those sub-sections that are I<recursive>, ie.
-that can contain a new sub-section with the same syntax as themselves.
-
-The same effect can be accomplished with circular references in the
-grammar tree or a suitable B<_dyn> section subroutine (see below},
-so this facility is included just for convenience.
-
 =item _vars
 
 Array containing the list of variables (assignments) in this section.
@@ -1174,17 +769,6 @@ If defined, a '_order' element will be put in every hash containing the
 sections with a number that determines the order in which the sections were
 defined.
 
-=item _varlist
-
-If defined, a '_varlist' element will be put in the config hash of this
-section with a list of the variables defined in the section. This can
-be used to find out the order of the variable assignments.
-
-The '_sub' function (see below) of any variables defined in this section
-will also receive a list of those variables already defined in the
-same section. This can be used to enforce the order of the variables
-during parsing.
-
 =item _doc
 
 Describes what this section is about
@@ -1196,27 +780,6 @@ with the real name of the section passed as its first argument. This is
 probably only useful for the regexp sections. If the function returns
 a defined value it is assumed that the test was not successful and an
 error is generated with the returned string as content.
-
-=item _dyn
-
-A subroutine reference (function pointer) that will be called when
-a new section of this syntax is encountered. The subroutine will get
-three arguments: the syntax of the section name (string or regexp), the
-actual name encountered (this will be the same as the first argument for
-non-regexp sections) and a reference to the grammar tree of the section.
-This subroutine can then modify the grammar tree dynamically.
-
-=item _dyndoc
-
-A hash reference that lists interesting names for the section that
-should be documented. The keys of the hash are the names and the
-values in the hash are strings that can contain an explanation
-for the name. The _dyn() subroutine is then called for each of 
-these names and the differences of the resulting grammar and
-the original one are documented. This module can currently document
-differences in the _vars list, listing new variables and removed
-ones, and differences in the _sections list, listing the
-new and removed sections.
 
 =back
 
@@ -1256,29 +819,6 @@ Description of the variable.
 =item _example
 
 A one line example for the content of this variable.
-
-=item _dyn
-
-A subroutine reference (function pointer) that will be called when the
-variable is assigned some value in the config file. The subroutine will
-get three arguments: the name of the variable, the value assigned and
-a reference to the grammar tree of this section.  This subroutine can
-then modify the grammar tree dynamically.
-
-Note that no _dyn() call is made for default and inherited values of
-the variable.
-
-=item _dyndoc
-
-A hash reference that lists interesting values for the variable that
-should be documented. The keys of the hash are the values and the
-values in the hash are strings that can contain an explanation
-for the value. The _dyn() subroutine is then called for each of 
-these values and the differences of the resulting grammar and
-the original one are documented. This module can currently document
-differences in the _vars list, listing new variables and removed
-ones, and differences in the _sections list, listing the
-new and removed sections.
 
 =back
 
@@ -1515,9 +1055,14 @@ The data is interpreted as one or more columns separated by spaces.
                 }
  };
 
+=head1 SEE ALSO
+
+L<Config::Grammar::Dynamic>
+
 =head1 COPYRIGHT
 
 Copyright (c) 2000-2005 by ETH Zurich. All rights reserved.
+Copyright (c) 2007 by David Schweikert. All rights reserved.
 
 =head1 LICENSE
 

@@ -4,6 +4,8 @@ META.yml
 Makefile.PL
 README
 lib/Config/Grammar.pm
+lib/Config/Grammar/Document.pm
+lib/Config/Grammar/Dynamic.pm
 t/DebugDump.pm
 t/dyn.t
 t/dyn1.cfg
